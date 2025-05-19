@@ -1,8 +1,5 @@
-type ipAttempt = {
-	count: number;
-	lastAttempt: number;
-	blockedUntil: number;
-};
+import { FailedLoginAttempt } from './failedLoginAttempt.entity';
+import { Repository } from 'typeorm';
 
 /**
  * Service class for managing failed login attempts by IP address.
@@ -11,19 +8,20 @@ type ipAttempt = {
  * - Track and update failed login attempts per IP.
  * - Block IPs temporarily after reaching a configurable threshold.
  * - Reset attempt counters after a configurable cooldown period.
+ * - Reset attempt counters after a successful login.
  *
  * Constructor parameters:
- * - blockDuration: how long an IP should be blocked (in seconds)
+ * - blockDuration: duration of IP block (in seconds)
  * - maxFailedAttempts: number of failed attempts before blocking
  * - resetFailedAttemptsTime: time threshold to reset the attempt count (in seconds)
  *
  * Usage:
- * This class is intended to be injected as a service through Dependency Injection.
- * Use a factory provider to inject configuration values at runtime.
+ * - Intended for injection as a service through Dependency Injection.
+ * - Use a factory provider to inject both the configuration values (blockDuration, maxFailedAttempts, resetFailedAttemptsTime)
+ * 		and the Repository<FailedLoginAttempt> dependency at runtime.
  */
 
 export class LoginAttempts {
-	failedAttempts = new Map<string, ipAttempt>();
 	blockDuration: number;
 	maxFailedAttempts: number;
 	resetFailedAttemptsTime: number;
@@ -32,34 +30,35 @@ export class LoginAttempts {
 		blockDuration: number = 30,
 		maxFailedAttempts: number = 5,
 		resetFailedAttemptsTime: number = 300,
+		private ipAttemptRepo: Repository<FailedLoginAttempt>,
 	) {
 		this.blockDuration = blockDuration * 1000;
 		this.maxFailedAttempts = maxFailedAttempts;
 		this.resetFailedAttemptsTime = resetFailedAttemptsTime * 1000;
 	}
 
-	checkIfAddressIsAlreadyBlocked(ip: string) {
-		if (!this.failedAttempts.has(ip))
-			return { blocked: false, blockDurationMessage: '' };
+	async checkIfAddressIsAlreadyBlocked(
+		ip: string,
+	): Promise<{ blocked: boolean; blockDurationMessage: string }> {
+		const ipAttempt = await this.ipAttemptRepo.findOneBy({ ip });
 
-		const attemptsForThisIP: ipAttempt = {
-			...(this.failedAttempts.get(ip) as ipAttempt),
-		};
+		if (!ipAttempt) return { blocked: false, blockDurationMessage: '' };
 
-		if (attemptsForThisIP.count < this.maxFailedAttempts) {
+		if (ipAttempt.count < this.maxFailedAttempts) {
 			return { blocked: false, blockDurationMessage: '' };
 		}
 
-		if (attemptsForThisIP.blockedUntil < Date.now()) {
-			attemptsForThisIP.count = 0;
-			attemptsForThisIP.blockedUntil = 0;
-			this.failedAttempts.set(ip, attemptsForThisIP);
+		if (ipAttempt.blockedUntil < Date.now()) {
+			ipAttempt.count = 0;
+			ipAttempt.blockedUntil = 0;
+
+			await this.ipAttemptRepo.save(ipAttempt);
 
 			return { blocked: false, blockDurationMessage: '' };
 		}
 
 		const remainingTime = Math.round(
-			(attemptsForThisIP.blockedUntil - Date.now()) / 1000,
+			(ipAttempt.blockedUntil - Date.now()) / 1000,
 		);
 
 		return {
@@ -68,7 +67,10 @@ export class LoginAttempts {
 		};
 	}
 
-	incrementOrResetCountAttempts(attemptsForThisIP: ipAttempt, now: number) {
+	incrementOrResetCountAttempts(
+		attemptsForThisIP: FailedLoginAttempt,
+		now: number,
+	) {
 		if (now - attemptsForThisIP.lastAttempt > this.resetFailedAttemptsTime) {
 			attemptsForThisIP.count = 1;
 		} else {
@@ -76,58 +78,81 @@ export class LoginAttempts {
 		}
 	}
 
-	updateFailedAttempt(ip: string) {
-		let attemptsForThisIP: ipAttempt;
+	async updateFailedAttempt(
+		ip: string,
+	): Promise<{ remainingAttemptsMessage: string }> {
 		const now = Date.now();
+		let attempt: FailedLoginAttempt;
+		const ipAttempt = await this.ipAttemptRepo.findOneBy({ ip });
 
-		if (!this.failedAttempts.has(ip)) {
-			attemptsForThisIP = {
+		if (!ipAttempt) {
+			attempt = {
+				ip: ip,
 				count: 1,
 				lastAttempt: now,
 				blockedUntil: 0,
 			};
-		} else {
-			attemptsForThisIP = {
-				...(this.failedAttempts.get(ip) as ipAttempt),
-			};
+			const attemptInstance = this.ipAttemptRepo.create(attempt);
 
-			this.incrementOrResetCountAttempts(attemptsForThisIP, now);
-			attemptsForThisIP.lastAttempt = now;
+			await this.ipAttemptRepo.save(attemptInstance);
+		} else {
+			this.incrementOrResetCountAttempts(ipAttempt, now);
+			ipAttempt.lastAttempt = now;
+			attempt = { ...ipAttempt };
+
+			await this.ipAttemptRepo.save(ipAttempt);
 		}
-		this.failedAttempts.set(ip, attemptsForThisIP);
 
 		return {
-			remainingAttemptsMessage: `Username or password is invalid. ${this.maxFailedAttempts - attemptsForThisIP.count} attempts before being blocked`,
+			remainingAttemptsMessage: `Username or password is invalid. ${Math.max(0, this.maxFailedAttempts - attempt.count)} attempts before being blocked`,
 		};
 	}
 
-	checkIfAddressReachedMaxAttempts(ip: string) {
-		const attemptsForThisIP: ipAttempt = {
-			...(this.failedAttempts.get(ip) as ipAttempt),
-		};
+	async checkIfAddressReachedMaxAttempts(
+		ip: string,
+	): Promise<{ blocked: boolean; blockDurationMessage: string }> {
+		const ipAttempt = await this.ipAttemptRepo.findOneBy({ ip });
 
-		if (attemptsForThisIP.count >= this.maxFailedAttempts) {
-			attemptsForThisIP.blockedUntil = Date.now() + this.blockDuration;
-			this.failedAttempts.set(ip, attemptsForThisIP);
+		if (!ipAttempt || ipAttempt.count < this.maxFailedAttempts) {
+			return { blocked: false, blockDurationMessage: '' };
+		} else {
+			ipAttempt.blockedUntil = Date.now() + this.blockDuration;
+
+			await this.ipAttemptRepo.save(ipAttempt);
 
 			return {
 				blocked: true,
 				blockDurationMessage: `Too many failed attempts. Please try again in ${Math.round(this.blockDuration / 1000)} seconds.`,
 			};
 		}
-
-		return { blocked: false, blockDurationMessage: '' };
 	}
 
-	handleLoginFailure(ip: string) {
-		const remainingAttemptsMessage = this.updateFailedAttempt(ip);
+	async handleLoginFailure(ip: string): Promise<{
+		blocked: boolean;
+		messages: {
+			blockDurationMessage: string;
+			remainingAttemptsMessage: string;
+		};
+	}> {
+		const { remainingAttemptsMessage } = await this.updateFailedAttempt(ip);
 
 		const { blocked, blockDurationMessage } =
-			this.checkIfAddressReachedMaxAttempts(ip);
+			await this.checkIfAddressReachedMaxAttempts(ip);
 
 		return {
 			blocked,
 			messages: { blockDurationMessage, remainingAttemptsMessage },
 		};
+	}
+
+	async resetAfterSuccessfulLogin(ip: string) {
+		const ipAttempt = await this.ipAttemptRepo.findOneBy({ ip });
+		if (ipAttempt) {
+			ipAttempt.count = 0;
+			ipAttempt.lastAttempt = Date.now();
+			ipAttempt.blockedUntil = 0;
+
+			await this.ipAttemptRepo.save(ipAttempt);
+		}
 	}
 }
