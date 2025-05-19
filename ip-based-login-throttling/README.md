@@ -4,36 +4,42 @@
 
 ## Description
 
-Ce module fournit une classe TypeScript pour limiter les tentatives de connexion échouées par adresse IP.  
-Il vise à atténuer les attaques de force brute en bloquant temporairement les IP après un certain nombre d'échecs.
+Ce module fournit une classe TypeScript permettant de limiter les tentatives de connexion échouées par adresse IP.  
+Il vise à atténuer les attaques de force brute en bloquant temporairement les IP après un certain nombre d'échecs successifs.
 
 ## Fonctionnalités
 
-- Suivi des tentatives échouées par IP.
-- Blocage temporaire après un seuil configurable.
-- Réinitialisation automatique du compteur après un délai défini.
+- ✅ Suivi des tentatives échouées par IP
+- 🚫 Blocage temporaire après un seuil configurable
+- 🔄 Réinitialisation automatique du compteur après un délai défini ou après une connexion réussie
+
+## Prérequis techniques
+
+Ce service repose sur un **stockage persistant**, via l'ORM compatible TypeORM et d’un dépôt `Repository<FailedLoginAttempt>`.
+Il suppose que le repository soit injecté à un module et en dépendance d'une factory de configuration.
 
 ## Configuration
 
-Ce service est conçu pour être utilisé via **injection de dépendance**, avec une **factory** permettant d’injecter dynamiquement les paramètres suivants :
+Ce service est conçu pour être injecté via une **injection de dépendances**, avec une **factory provider** permettant d’injecter dynamiquement les paramètres suivants :
 
-- `blockDuration` *(secondes)* : durée de blocage.
-- `maxFailedAttempts` : seuil d’échecs autorisés.
-- `resetFailedAttemptsTime` *(secondes)* : délai de réinitialisation du compteur.
+- `blockDuration` *(secondes)* : durée du blocage d’une IP
+- `maxFailedAttempts` : nombre d’échecs autorisés avant blocage
+- `resetFailedAttemptsTime` *(secondes)* : délai avant réinitialisation du compteur
 
-> Les valeurs par défaut recommandées sont adaptées à une application de taille moyenne avec un niveau de sécurité standard.
+> Des valeurs par défaut sont recommandées pour une application de taille moyenne avec un niveau de sécurité standard.
 
 ## Utilisation
 
-Le service utilise un stockage en mémoire sans persistance entre les redémarrages.  
-Il peut être intégré dans une logique d’authentification serveur ou framework (ex. NestJS).
+Le service s’appuie sur un stockage persistant, via un dépôt de type Repository<FailedLoginAttempt>.
+Il peut être intégré dans une logique d’authentification côté serveur (ex. : middleware Express, service NestJS, etc.).
 
-## À venir
+## Évolutions prévues
 
-- Tests unitaires (ex. : avec Jest).
-- Possibles extensions dans ce dépôt : autres modules liés à la sécurité.
+- ✅ Nettoyage périodique
+- 🔧 Ajout de tests unitaires (ex. : Jest)
 
 ## Auteur
 
 Développé par **Tim**, développeur web indépendant.  
-Ce code est mis à disposition à titre d'exemple.
+Ce code est publié à des fins **pédagogiques** et **exemplaires uniquement**.
+
